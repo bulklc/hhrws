@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Regional Water Demand Variations</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Add Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.1/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-+0n0xVW2eSR5OomGNYDnhzAbDsOXxcvSN1TPprVMTNDbiYZCxYbOOl7+AMvyTG2x"
+      crossorigin="anonymous"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        font-family: Arial, sans-serif;
+        background-color: #f8f9fa;
+      }
+      .container {
+        width: 100%;
+        height: calc(
+          100% - 106px
+        ); /* Account for navbar (56px) and switch (50px) */
+        padding: 20px;
+        box-sizing: border-box;
+      }
+      #chartContainer {
+        width: 100%;
+        height: 100%;
+        margin: 0 auto;
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .chart-title {
+        margin: 0;
+        padding: 15px 0;
+        text-align: center;
+        font-size: 20px;
+        color: #017dc3;
+      }
+
+      /* Switch container */
+      .switch-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 50px;
+        background-color: white;
+        border-top: 1px solid #ddd;
+        display: flex;
+        justify-content: flex-start; /* was center */
+        align-items: center;
+        gap: 12px;
+        padding: 0 20px; /* add left padding */
+        box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      /* Fix wobble: reserve space for the longest label */
+      .view-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 90px; /* enough for "Average" */
+        font-size: 14px;
+        font-weight: 700;
+        color: #017dc3;
+        text-transform: uppercase;
+        white-space: nowrap; /* prevent wrap */
+      }
+
+      /* Toggle switch (half size) */
+      .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 100px;
+        height: 25px;
+      }
+
+      .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background-color: #017dc3;
+        transition: 0.25s;
+        border-radius: 12.5px;
+      }
+
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 21px;
+        width: 48px;
+        left: 2px;
+        bottom: 2px;
+        background-color: white;
+        transition: 0.25s;
+        border-radius: 10.5px;
+      }
+
+      input:checked + .slider:before {
+        transform: translateX(48px);
+      }
+
+      .switch-label {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 10px;
+        font-weight: 600;
+        color: white;
+        opacity: 0.6; /* default dim */
+        pointer-events: none;
+        transition: opacity 0.2s;
+      }
+
+      .switch-label.left {
+        left: 10px;
+      }
+      .switch-label.right {
+        right: 15px;
+      }
+
+      /* Highlight active side */
+      input:not(:checked) + .slider .switch-label.left {
+        opacity: 1;
+      }
+      input:checked + .slider .switch-label.right {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Navigation Bar -->
+    <nav
+      class="navbar navbar-expand-lg navbar-dark"
+      style="background-color: #017dc3"
+    >
+      <div class="container-fluid">
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navbarNav"
+          aria-controls="navbarNav"
+          aria-expanded="false"
+          aria-label="Toggle navigation"
+        >
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link" href="index.html">Map</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="regional_demands.html"
+                >Regional Demands</a
+              >
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container">
+      <div id="chartContainer">
+        <canvas id="demandChart"></canvas>
+      </div>
+    </div>
+
+    <div class="switch-container">
+      <label class="toggle-switch">
+        <input
+          type="checkbox"
+          id="viewToggle"
+          aria-label="Toggle between Average and Max"
+        />
+        <span class="slider">
+          <span class="switch-label left">AVG</span>
+          <span class="switch-label right">MAX</span>
+        </span>
+      </label>
+      <div id="toggleStatus" class="view-status" aria-live="polite">
+        Average
+      </div>
+    </div>
+
+    <script>
+      // Plugin to draw vertical line on hover
+      Chart.plugins.register({
+        afterDatasetsDraw: function (chart) {
+          if (chart.tooltip._active && chart.tooltip._active.length) {
+            var activePoint = chart.tooltip._active[0];
+            var ctx = chart.ctx;
+            var x = activePoint.tooltipPosition().x;
+            var topY = chart.scales["y-axis-0"].top;
+            var bottomY = chart.scales["y-axis-0"].bottom;
+
+            // Draw the vertical line
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(x, topY);
+            ctx.lineTo(x, bottomY);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
+            ctx.stroke();
+            ctx.restore();
+          }
+        },
+      });
+
+      // Only draw vertical grid lines for labeled x-axis ticks (Chart.js v2.x)
+      // We disable the default x grid lines and render our own at positions
+      // where the tick label is non-empty. This keeps grid lines aligned to labels only.
+      Chart.plugins.register({
+        beforeDatasetsDraw: function (chart) {
+          var xAxis =
+            chart.scales && (chart.scales["x-axis-0"] || chart.scales["x"]);
+          if (!xAxis) return;
+          var ctx = chart.ctx || (chart.chart && chart.chart.ctx);
+          if (!ctx) return;
+
+          var area = chart.chartArea;
+          ctx.save();
+          ctx.strokeStyle = "rgba(0,0,0,0.1)";
+          ctx.lineWidth = 1;
+
+          // Draw a vertical line only for ticks that have a visible label
+          (xAxis.ticks || []).forEach(function (tick, index) {
+            var hasLabel = tick != null && String(tick).trim() !== "";
+            if (!hasLabel) return;
+            var x = xAxis.getPixelForTick(index);
+            // Skip if x is not finite (safety)
+            if (!isFinite(x)) return;
+            ctx.beginPath();
+            ctx.moveTo(x, area.top);
+            ctx.lineTo(x, area.bottom);
+            ctx.stroke();
+          });
+
+          ctx.restore();
+        },
+      });
+      // Fetch the regional demand data
+      fetch("data/regional_demands.json")
+        .then((response) => response.json())
+        .then((data) => {
+          // Process the data to create a representative year
+          processAndDisplayData(data);
+        })
+        .catch((error) => console.error("Error loading data:", error));
+
+      // Global chart state
+      var demandChart = null;
+      var chartData = null;
+
+      // Process data for both Average (mean of hourly points) and Max (max hourly per day)
+      function processAndDisplayData(rawData) {
+        // Convert time values to day of year (0-365)
+        rawData.forEach((entry) => {
+          entry.dayOfYear = Math.floor(entry.time % 365);
+        });
+
+        // Group data by day of year, tracking sums and maxima
+        const groupedByDay = {};
+        rawData.forEach((entry) => {
+          const day = entry.dayOfYear;
+          if (!groupedByDay[day]) {
+            groupedByDay[day] = {
+              count: 0,
+              C: 0,
+              P: 0,
+              SE: 0,
+              T: 0,
+              maxC: -Infinity,
+              maxP: -Infinity,
+              maxSE: -Infinity,
+              maxT: -Infinity,
+            };
+          }
+
+          groupedByDay[day].C += entry.C;
+          groupedByDay[day].P += entry.P;
+          groupedByDay[day].SE += entry.SE;
+          const totalNow = entry.C + entry.P + entry.SE;
+          groupedByDay[day].T += totalNow;
+          groupedByDay[day].count++;
+
+          groupedByDay[day].maxC = Math.max(groupedByDay[day].maxC, entry.C);
+          groupedByDay[day].maxP = Math.max(groupedByDay[day].maxP, entry.P);
+          groupedByDay[day].maxSE = Math.max(groupedByDay[day].maxSE, entry.SE);
+          groupedByDay[day].maxT = Math.max(groupedByDay[day].maxT, totalNow);
+        });
+
+        // Average per day (existing behavior)
+        const typicalYearAvg = [];
+        // Max hourly per day (new behavior for toggle “Max”)
+        const typicalYearMax = [];
+
+        for (let day = 0; day < 366; day++) {
+          const g = groupedByDay[day];
+          if (!g) continue;
+
+          // Average mode
+          typicalYearAvg.push({
+            dayOfYear: day,
+            C: g.C / g.count,
+            P: g.P / g.count,
+            SE: g.SE / g.count,
+            T: g.T / g.count,
+          });
+
+          // Max mode: use daily max of hourly points
+          typicalYearMax.push({
+            dayOfYear: day,
+            C: g.maxC,
+            P: g.maxP,
+            SE: g.maxSE,
+            T: g.maxT,
+          });
+        }
+
+        // Sort by day of year
+        typicalYearAvg.sort((a, b) => a.dayOfYear - b.dayOfYear);
+        typicalYearMax.sort((a, b) => a.dayOfYear - b.dayOfYear);
+
+        // Downsample if needed (apply same factor to both for consistent labels)
+        let displayDataAvg = typicalYearAvg;
+        let displayDataMax = typicalYearMax;
+        if (displayDataAvg.length > 1000) {
+          const factor = Math.ceil(displayDataAvg.length / 1000);
+          displayDataAvg = displayDataAvg.filter(
+            (_, idx) => idx % factor === 0
+          );
+          displayDataMax = displayDataMax.filter(
+            (_, idx) => idx % factor === 0
+          );
+        }
+
+        // Prepare labels/dates
+        const dates = displayDataAvg.map(
+          (entry) => new Date(2022, 0, entry.dayOfYear + 1)
+        );
+        const monthLabels = [];
+        const monthNames = [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
+        ];
+
+        // Prepare in-memory datasets for quick toggle updates
+        chartData = {
+          average: {
+            dates,
+            cityData: displayDataAvg.map((e) => e.C),
+            peninsulaData: displayDataAvg.map((e) => e.P),
+            southeastData: displayDataAvg.map((e) => e.SE),
+            totalData: displayDataAvg.map((e) => e.T),
+          },
+          max: {
+            dates,
+            cityData: displayDataMax.map((e) => e.C),
+            peninsulaData: displayDataMax.map((e) => e.P),
+            southeastData: displayDataMax.map((e) => e.SE),
+            totalData: displayDataMax.map((e) => e.T),
+          },
+          dates,
+          monthNames,
+        };
+
+        // Create chart with the current toggle state
+        const isMax = !!document.getElementById("viewToggle")?.checked;
+        createChart(chartData, isMax);
+        updateChart(isMax);
+      }
+
+      // Create the chart once
+      function createChart(cd, useMax) {
+        const dates = cd.dates;
+        const monthNames = cd.monthNames;
+        const mode = useMax ? "max" : "average";
+        const data = cd[mode];
+
+        const ctx = document.getElementById("demandChart").getContext("2d");
+        demandChart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: dates.map((_, i) => i),
+            datasets: [
+              {
+                label: "City",
+                data: data.cityData,
+                borderColor: "#00aeef",
+                backgroundColor: "rgba(0, 174, 239, 0.1)",
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: true,
+              },
+              {
+                label: "Peninsula",
+                data: data.peninsulaData,
+                borderColor: "#00a651",
+                backgroundColor: "rgba(0, 166, 81, 0.1)",
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: true,
+              },
+              {
+                label: "Southeast",
+                data: data.southeastData,
+                borderColor: "#fdb813",
+                backgroundColor: "rgba(253, 184, 19, 0.1)",
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: true,
+              },
+              {
+                label: "Total",
+                data: data.totalData,
+                borderColor: "#ed1c24",
+                backgroundColor: "rgba(237, 28, 36, 0.1)",
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            title: {
+              display: true,
+              text: useMax
+                ? "Maximum Regional Water Demand Throughout a Typical Year"
+                : "Regional Water Demand Throughout a Typical Year",
+              fontSize: 16,
+            },
+            scales: {
+              xAxes: [
+                {
+                  display: true,
+                  scaleLabel: { display: false, labelString: "Date" },
+                  ticks: {
+                    autoSkip: false,
+                    maxTicksLimit: 12,
+                    callback: function (_value, index) {
+                      const date = dates[index];
+                      if (!date) return "";
+                      if (
+                        index === 0 ||
+                        date.getMonth() !== dates[index - 1].getMonth()
+                      ) {
+                        return monthNames[date.getMonth()];
+                      }
+                      return "";
+                    },
+                  },
+                  // gridLines drawn by custom plugin elsewhere
+                  gridLines: { display: false, drawBorder: true },
+                },
+              ],
+              yAxes: [
+                {
+                  display: true,
+                  scaleLabel: {
+                    display: true,
+                    labelString: "Demand (MGD)",
+                  },
+                  ticks: {
+                    beginAtZero: false,
+                    max: 400, // Set max limit to 400 MGD
+                  },
+                },
+              ],
+            },
+            tooltips: {
+              mode: "index",
+              intersect: false,
+              callbacks: {
+                title: function (tooltipItems) {
+                  const index = tooltipItems[0].index;
+                  const date = dates[index];
+                  return date.toLocaleDateString("en-US", {
+                    month: "long",
+                    day: "numeric",
+                  });
+                },
+                label: function (tooltipItem, data) {
+                  const datasetLabel =
+                    data.datasets[tooltipItem.datasetIndex].label || "";
+                  const value = tooltipItem.yLabel;
+                  return (
+                    datasetLabel + ": " + Number(value).toFixed(2) + " MGD"
+                  );
+                },
+              },
+            },
+            legend: {
+              display: true,
+              position: "top",
+              labels: { fontSize: 14, padding: 15, boxWidth: 30 },
+            },
+            layout: { padding: { left: 10, right: 25, top: 0, bottom: 10 } },
+            elements: { line: { tension: 0.3 } },
+          },
+        });
+
+        // Hook up the toggle to update chart data
+        var toggle = document.getElementById("viewToggle");
+        if (toggle) {
+          toggle.addEventListener("change", function () {
+            updateChart(this.checked);
+          });
+        }
+      }
+
+      // Update datasets and title for the selected mode (Average vs Max)
+      function updateChart(useMax) {
+        if (!demandChart || !chartData) return;
+        const mode = useMax ? "max" : "average";
+        const data = chartData[mode];
+
+        demandChart.data.datasets[0].data = data.cityData;
+        demandChart.data.datasets[1].data = data.peninsulaData;
+        demandChart.data.datasets[2].data = data.southeastData;
+        demandChart.data.datasets[3].data = data.totalData;
+
+        demandChart.options.title.text = useMax
+          ? "Maximum Hourly Regional Water Demand Throughout a Typical Year"
+          : "Average Regional Water Demand Throughout a Typical Year";
+
+        // Enable animation with custom duration
+        demandChart.update({
+          duration: 800,
+          easing: "easeInOutQuart",
+        });
+
+        // Keep the UI status label in sync (reuses existing helper if present)
+        if (typeof updateViewStatus === "function") {
+          updateViewStatus(useMax);
+        } else {
+          var el = document.getElementById("toggleStatus");
+          if (el) el.textContent = useMax ? "Max" : "Average";
+        }
+      }
+    </script>
+
+    <!-- Add Bootstrap JS at the end -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta2/dist/js/bootstrap.bundle.min.js"
+      crossorigin="anonymous"
+    ></script>
+  </body>
+</html>
